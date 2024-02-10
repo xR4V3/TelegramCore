@@ -31,7 +31,7 @@ public class KeyboardImpl {
 
     public KeyboardImpl completeRow() {
         rows.add(currentRow);
-        currentRow = new KeyboardButton[0];
+        currentRow = new KeyboardButton[0]; // Reset current row
         return this;
     }
 }
