@@ -3,10 +3,7 @@ package ru.xr4v3.bot;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.UpdatesListener;
 import com.pengrad.telegrambot.model.Update;
-import com.pengrad.telegrambot.model.request.InlineKeyboardButton;
-import com.pengrad.telegrambot.model.request.InlineKeyboardMarkup;
-import com.pengrad.telegrambot.model.request.KeyboardButton;
-import com.pengrad.telegrambot.model.request.ReplyKeyboardMarkup;
+import com.pengrad.telegrambot.model.request.*;
 import com.pengrad.telegrambot.request.SendMessage;
 import ru.xr4v3.bot.events.EventHandler;
 import ru.xr4v3.bot.events.TelegramEvent;
@@ -90,4 +87,71 @@ public abstract class TelegramCore {
         bot.execute(new SendMessage(chatId, message).replyMarkup(markup));
     }
 
+    /**
+     * Упрощенная отправка текстовых сообщений с настройкой форматирования и клавиатуры.
+     *
+     * @param chatId ID чата для отправки сообщения.
+     * @param text Текст сообщения для отправки.
+     * @param parseMode Форматирование текста сообщения (Markdown, HTML или null).
+     * @param replyMarkup Опциональная клавиатура для сообщения (может быть ReplyKeyboardMarkup или InlineKeyboardMarkup, или null).
+     */
+    public void sendMessage(Long chatId, String text, ParseMode parseMode, Object replyMarkup) {
+        SendMessage request = new SendMessage(chatId, text);
+
+        // Установка формата текста, если указан
+        if (parseMode != null) {
+            request.parseMode(parseMode);
+        }
+
+        // Установка клавиатуры, если указана
+        if (replyMarkup != null) {
+            if (replyMarkup instanceof InlineKeyboardMarkup) {
+                request.replyMarkup((InlineKeyboardMarkup) replyMarkup);
+            } else if (replyMarkup instanceof ReplyKeyboardMarkup) {
+                request.replyMarkup((ReplyKeyboardMarkup) replyMarkup);
+            }
+        }
+
+        bot.execute(request);
+    }
+
+    /**
+     * Упрощенная отправка текстовых сообщений с настройкой форматирования и клавиатуры.
+     *
+     * @param chatId ID чата для отправки сообщения.
+     * @param text Текст сообщения для отправки.
+     * @param parseMode Форматирование текста сообщения (Markdown, HTML или null).
+     */
+    public void sendMessage(Long chatId, String text, ParseMode parseMode) {
+        SendMessage request = new SendMessage(chatId, text);
+
+        // Установка формата текста, если указан
+        if (parseMode != null) {
+            request.parseMode(parseMode);
+        }
+
+        bot.execute(request);
+    }
+
+    /**
+     * Упрощенная отправка текстовых сообщений с настройкой форматирования и клавиатуры.
+     *
+     * @param chatId ID чата для отправки сообщения.
+     * @param text Текст сообщения для отправки.
+     * @param replyMarkup Опциональная клавиатура для сообщения (может быть ReplyKeyboardMarkup или InlineKeyboardMarkup, или null).
+     */
+    public void sendMessage(Long chatId, String text, Object replyMarkup) {
+        SendMessage request = new SendMessage(chatId, text);
+
+        // Установка клавиатуры, если указана
+        if (replyMarkup != null) {
+            if (replyMarkup instanceof InlineKeyboardMarkup) {
+                request.replyMarkup((InlineKeyboardMarkup) replyMarkup);
+            } else if (replyMarkup instanceof ReplyKeyboardMarkup) {
+                request.replyMarkup((ReplyKeyboardMarkup) replyMarkup);
+            }
+        }
+
+        bot.execute(request);
+    }
 }
