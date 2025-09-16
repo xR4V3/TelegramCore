@@ -4,12 +4,20 @@ import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.UpdatesListener;
 import com.pengrad.telegrambot.model.Update;
 import com.pengrad.telegrambot.model.request.*;
-import com.pengrad.telegrambot.request.SendMessage;
+import com.pengrad.telegrambot.request.*;
+import com.pengrad.telegrambot.response.BaseResponse;
+import com.pengrad.telegrambot.response.GetFileResponse;
+import com.pengrad.telegrambot.response.SendResponse;
 import ru.xr4v3.bot.events.EventHandler;
 import ru.xr4v3.bot.events.TelegramEvent;
 import ru.xr4v3.bot.events.annotations.OnCallbackQuery;
 import ru.xr4v3.bot.events.annotations.OnInlineQuery;
 import ru.xr4v3.bot.events.annotations.OnMessage;
+
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
@@ -84,7 +92,10 @@ public abstract class TelegramCore {
         InlineKeyboardMarkup markup = new InlineKeyboardMarkup(keyboard.toArray(new InlineKeyboardButton[0][0]));
 
         // Отправка сообщения с инлайн-клавиатурой
-        bot.execute(new SendMessage(chatId, message).replyMarkup(markup));
+        SendResponse response = bot.execute(new SendMessage(chatId, message).replyMarkup(markup));
+        if (!response.isOk()) {
+            System.err.println("Ошибка Telegram API: " + response.description());
+        }
     }
 
 
@@ -155,4 +166,113 @@ public abstract class TelegramCore {
 
         bot.execute(request);
     }
+
+    public void editMessage(Long chatId, Integer messageId, String text) {
+        EditMessageText edit = new EditMessageText(chatId, messageId, text);
+        bot.execute(edit);
+    }
+
+    public void editMessage(Long chatId, Integer messageId, String text, List<List<InlineKeyboardButton>> buttonRows) {
+        InlineKeyboardButton[][] keyboard = buttonRows.stream()
+                .map(row -> row.toArray(new InlineKeyboardButton[0]))
+                .toArray(InlineKeyboardButton[][]::new);
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup(keyboard);
+        EditMessageText edit = new EditMessageText(chatId, messageId, text).replyMarkup(markup);
+        BaseResponse response = bot.execute(edit);
+        if (!response.isOk()) {
+            System.err.println("Ошибка Telegram API: " + response.description());
+        }
+    }
+
+    public void editKeyboard(Long chatId, Integer messageId, List<List<InlineKeyboardButton>> buttonRows) {
+        InlineKeyboardButton[][] keyboard = buttonRows.stream()
+                .map(row -> row.toArray(new InlineKeyboardButton[0]))
+                .toArray(InlineKeyboardButton[][]::new);
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup(keyboard);
+        EditMessageReplyMarkup editMarkup = new EditMessageReplyMarkup(chatId, messageId).replyMarkup(markup);
+        bot.execute(editMarkup);
+    }
+
+    // TelegramCore.java
+    public void editMessage(Long chatId, Integer messageId, String text, ParseMode parseMode, List<List<InlineKeyboardButton>> buttonRows) {
+        InlineKeyboardButton[][] keyboard = buttonRows.stream()
+                .map(row -> row.toArray(new InlineKeyboardButton[0]))
+                .toArray(InlineKeyboardButton[][]::new);
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup(keyboard);
+        EditMessageText edit = new EditMessageText(chatId, messageId, text)
+                .parseMode(parseMode)
+                .replyMarkup(markup);
+        BaseResponse response = bot.execute(edit);
+        if (!response.isOk()) {
+            System.err.println("Ошибка Telegram API: " + response.description());
+        }
+    }
+
+
+    public void forwardMessage(Long toChatId, Long fromChatId, Integer messageId) {
+        ForwardMessage request = new ForwardMessage(toChatId, fromChatId, messageId);
+        bot.execute(request);
+    }
+
+    /**
+     * Получает InputStream содержимого файла по fileId
+     *
+     * @param filePath Telegram file_id
+     * @return InputStream с содержимым или null при ошибке
+     */
+    public InputStream downloadFile(String filePath) {
+        GetFile getFile = new GetFile(filePath);
+        GetFileResponse fileResponse = bot.execute(getFile);
+
+        if (!fileResponse.isOk()) {
+            System.out.println("Ошибка получения файла: " + fileResponse.description());
+            return null;
+        }
+
+        String fullPath = fileResponse.file().filePath();
+        try {
+            byte[] fileBytes = bot.getFileContent(fileResponse.file());
+            return new ByteArrayInputStream(fileBytes);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    public void sendPhoto(Long chatId, File photoFile) {
+        SendPhoto sendPhoto = new SendPhoto(chatId, photoFile);
+        bot.execute(sendPhoto);
+    }
+
+    /**
+     * Отправляет группу фото (медиа-группу) в чат.
+     *
+     * @param chatId ID чата для отправки.
+     * @param photos Список файлов с фотографиями.
+     */
+    public void sendMediaGroup(Long chatId, List<File> photos) {
+        if (photos == null || photos.isEmpty()) {
+            return;
+        }
+
+        List<InputMedia> mediaList = new ArrayList<>();
+        for (File photo : photos) {
+            mediaList.add(new InputMediaPhoto(photo));
+        }
+
+        InputMedia<?>[] mediaArray = mediaList.toArray(new InputMedia[0]);
+
+        SendMediaGroup sendMediaGroup = new SendMediaGroup(chatId, mediaArray);
+        bot.execute(sendMediaGroup);
+    }
+
+
+    public void deleteMessage(Long chatId, Integer messageId) {
+        DeleteMessage delete = new DeleteMessage(chatId.toString(), messageId);
+        bot.execute(delete);
+    }
+
 }
