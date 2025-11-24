@@ -5,31 +5,35 @@ import com.pengrad.telegrambot.model.Update;
 import com.pengrad.telegrambot.model.request.InlineKeyboardButton;
 import com.pengrad.telegrambot.model.request.KeyboardButton;
 import core.Main;
-import modules.Checks;
-import modules.OrderLoader;
-import modules.Routes;
+import modules.*;
+import modules.parsers.lemana.LemanaAPI;
+import modules.parsers.saturn.SaturnAPI;
 import ru.xr4v3.bot.events.TelegramEvent;
 import ru.xr4v3.bot.events.annotations.OnCallbackQuery;
 import ru.xr4v3.bot.events.annotations.OnInlineQuery;
 import ru.xr4v3.bot.events.annotations.OnMessage;
 import utils.*;
 
+import java.io.File;
+import java.time.YearMonth;
 import java.util.*;
 
 public class GlobalEvents implements TelegramEvent {
 
-    private DriverMenu driverMenu;
-    private LogistMenu logistMenu;
-    private AdminMenu adminMenu;
-    private ManagerMenu managerMenu;
-    private CourierMenu courierMenu;
+    private final DriverMenu driverMenu;
+    private final LogistMenu logistMenu;
+    private final AdminMenu adminMenu;
+    private final ManagerMenu managerMenu;
+    private final CourierMenu courierMenu;
+    private final OperatorMenu operatorMenu;
 
-    public GlobalEvents(DriverMenu driverMenu, LogistMenu logistMenu,ManagerMenu managerMenu, AdminMenu adminMenu, CourierMenu courierMenu) {
+    public GlobalEvents(DriverMenu driverMenu, LogistMenu logistMenu,ManagerMenu managerMenu, AdminMenu adminMenu, CourierMenu courierMenu, OperatorMenu operatorMenu) {
         this.driverMenu = driverMenu;
         this.logistMenu = logistMenu;
         this.managerMenu = managerMenu;
         this.adminMenu = adminMenu;
         this.courierMenu = courierMenu;
+        this.operatorMenu = operatorMenu;
     }
 
     @OnInlineQuery
@@ -41,6 +45,10 @@ public class GlobalEvents implements TelegramEvent {
         OrderLoader.getDriverOrders(update);
         Routes.handleRouteCallback(update);
         Checks.handleChecksCallback(update);
+        ReportManager.handleReportCallback(update);
+        ReturnsManager.onCallback(update);
+        PayrollManager.handlePayrollCallbacks(update);
+        ParsersManager.handleChecksCallback(update);
     }
 
 
@@ -60,6 +68,32 @@ public class GlobalEvents implements TelegramEvent {
             if(user.getRole().equals("DRIVER")){
                 Routes.showOrdersMenu(update);
             }
+        }
+
+        if (update.message().text().contains(EDriverMenuBtn.RETURNS.getButtonText())) {
+            ReturnsManager.openFromButton(update.message().chat().id(), userId);
+        }
+
+        if(update.message().text().contains(EAdminMenuBtn.OTHER.getButtonText()) || update.message().text().contains(ELogistMenuBtn.OTHER.getButtonText())){
+            List<List<InlineKeyboardButton>> kb = new ArrayList<>();
+            kb.add(Collections.singletonList(
+                    new InlineKeyboardButton("📊 Отчёты").callbackData("reports:open")
+            ));
+            kb.add(Collections.singletonList(
+                    new InlineKeyboardButton("\uD83D\uDCB0 Зарплаты").callbackData("payroll:open")
+            ));
+
+            kb.add(Collections.singletonList(
+                    new InlineKeyboardButton("©\uFE0F Парсеры").callbackData("parsers:list")
+            ));
+
+
+            Main.getInstance().sendInlineKeyboard(
+                    update.message().chat().id(),
+                    kb,
+                    "Выберите раздел:"
+            );
+            return;
         }
 
         if(update.message().text().contains(EAdminMenuBtn.ROUTES.getButtonText()) || update.message().text().contains(ELogistMenuBtn.ROUTES.getButtonText())){
@@ -94,9 +128,38 @@ public class GlobalEvents implements TelegramEvent {
             OrderLoader.drivers(update);
         }
 
-        if(update.message().text().contains(ECourierMenuBtn.ROUTES.getButtonText())) {
-            String msg = CourierMenu.getOrdersForTomorrowOrWeekend(OrderLoader.orders);
+        if(update.message().text().contains(ECourierMenuBtn.ROUTES.getButtonText()) || update.message().text().contains(EOperatorMenuBtn.ROUTES.getButtonText()) ) {
+            Set<String> pvzAddresses = new HashSet<>();
+            pvzAddresses.add("г Москва проезд Шокальского д 47 к 1");
+            String msg = CourierMenu.getOrdersForTomorrowOrWeekend(OrderLoader.orders, pvzAddresses);
             Main.getInstance().sendMessage(update.message().chat().id(), msg);
+        }
+
+        if(update.message().text().contains(EDriverMenuBtn.SALARY.getButtonText())) {
+            PayrollManager.showMySettlementText(update.message().chat().id(), userId, YearMonth.now());
+        }
+
+        if(update.message().text().contains(ELogistMenuBtn.SALARIES.getButtonText())){
+            PayrollManager.openMenuFromButton(update.message().chat().id(), userId);
+        }
+
+        if(update.message().text().contains(EOperatorMenuBtn.PARSERS.getButtonText())){
+            List<List<InlineKeyboardButton>> kb = new ArrayList<>();
+
+            kb.add(Collections.singletonList(
+                    new InlineKeyboardButton("ЛеманаПро").callbackData("parsers:lemanapro")
+            ));
+
+            kb.add(Collections.singletonList(
+                    new InlineKeyboardButton("Сатурн").callbackData("parsers:saturn")
+            ));
+
+            Main.getInstance().sendInlineKeyboard(
+                    update.message().chat().id(),
+                    kb,
+                    "Выберите раздел:"
+            );
+            return;
         }
 
     }
@@ -116,6 +179,7 @@ public class GlobalEvents implements TelegramEvent {
                         case "MANAGER" -> managerMenu.open(update, greeting);
                         case "DRIVER" -> driverMenu.open(update, greeting);
                         case "COURIER" -> courierMenu.open(update, greeting);
+                        case "OPERATOR" -> operatorMenu.open(update, greeting);
                         default -> Main.getInstance().sendMessage(update.message().chat().id(),
                                 "Извините, роль не определена. Обратитесь к администратору.");
                     }
@@ -149,6 +213,7 @@ public class GlobalEvents implements TelegramEvent {
                         case "MANAGER" -> managerMenu.open(update, greeting);
                         case "DRIVER" -> driverMenu.open(update, greeting);
                         case "COURIER" -> courierMenu.open(update, greeting);
+                        case "OPERATOR" -> operatorMenu.open(update, greeting);
                         default -> Main.getInstance().sendMessage(update.message().chat().id(),
                                 "Извините, роль не определена. Обратитесь к администратору.");
                     }
@@ -162,7 +227,7 @@ public class GlobalEvents implements TelegramEvent {
             }
         }
 
-        if (update.message().text() != null && update.message().text().contains(";")) {
+        if (update.message().text() != null && update.message().text().contains(";") && !update.message().text().startsWith("/")) {
             String[] parts = update.message().text().split(";");
             if (parts.length == 3) {
                 String phone = parts[0].trim();
@@ -355,6 +420,112 @@ public class GlobalEvents implements TelegramEvent {
                             "Новая роль: " + target.getRole());
 
             return; // важно: чтобы далее не сработали другие обработчики текста с ';'
+        }
+
+        if (update.message() == null || update.message().text() == null) return;
+
+        Long userId = update.message().from().id();
+        String text = update.message().text().trim();
+
+        UserData user = UserData.findUserById(userId);
+        if (user == null) return;
+
+        String pending = user.getPendingAction();
+
+        if (pending == null) {
+            // обычный текст
+            return;
+        }
+
+// лучше сразу сбросить флаг, чтобы не ловить дубли
+        user.setPendingAction(null);
+
+// === ТОЧЕЧНЫЙ ПАРС ===
+        if ("LEMANAPRO_SINGLE".equals(pending)) {
+            // каждая строка — артикул или ссылка ЛеманаПро
+            List<String> lines = Arrays.stream(text.split("\\r?\\n"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+
+            Main.getInstance().sendMessage(chatId, "Запускаю обработку ЛеманаПро, файл придёт сообщением.");
+
+            Main.getInstance().getExecutor().submit(() -> {
+                try {
+                    File file = LemanaAPI.startLemanaParse(lines);
+                    if (file != null && file.exists()) {
+                        Main.getInstance().sendDocument(chatId, file, "Готово, вот ваш файл ✅");
+                    } else {
+                        Main.getInstance().sendMessage(chatId, "❌ Не удалось сформировать файл.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Main.getInstance().sendMessage(chatId, "❌ Ошибка при обработке: " + e.getMessage());
+                }
+            });
+
+        } else if ("SATURN_SINGLE".equals(pending)) {
+            // каждая строка — ссылка на товар Сатурн
+            List<String> lines = Arrays.stream(text.split("\\r?\\n"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+
+            Main.getInstance().sendMessage(chatId, "Запускаю обработку Сатурн, файл придёт сообщением.");
+
+            Main.getInstance().getExecutor().submit(() -> {
+                try {
+                    File file = SaturnAPI.startSaturnParse(lines); // <-- ВАЖНО: Сатурн API
+                    if (file != null && file.exists()) {
+                        Main.getInstance().sendDocument(chatId, file, "Готово, вот ваш файл ✅");
+                    } else {
+                        Main.getInstance().sendMessage(chatId, "❌ Не удалось сформировать файл.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Main.getInstance().sendMessage(chatId, "❌ Ошибка при обработке: " + e.getMessage());
+                }
+            });
+
+
+// === ПАРС КАТАЛОГА ===
+        } else if ("LEMANAPRO_CATEGORY".equals(pending)) {
+            String catalogUrl = text.trim();
+
+            Main.getInstance().sendMessage(chatId, "Запускаю парсинг каталога ЛеманаПро, результат придёт файлом.");
+
+            Main.getInstance().getExecutor().submit(() -> {
+                try {
+                    File file = LemanaAPI.startLemanaParseCategory(catalogUrl);
+                    if (file != null && file.exists()) {
+                        Main.getInstance().sendDocument(chatId, file, "Готово, каталог ЛеманаПро обработан ✅");
+                    } else {
+                        Main.getInstance().sendMessage(chatId, "❌ Не удалось сформировать файл по каталогу.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Main.getInstance().sendMessage(chatId, "❌ Ошибка при обработке каталога: " + e.getMessage());
+                }
+            });
+
+        } else if ("SATURN_CATEGORY".equals(pending)) {
+            String catalogUrl = text.trim();
+
+            Main.getInstance().sendMessage(chatId, "Запускаю парсинг каталога Сатурн, результат придёт файлом.");
+
+            Main.getInstance().getExecutor().submit(() -> {
+                try {
+                    File file = SaturnAPI.startSaturnParseCategory(catalogUrl); // <-- ВАЖНО: Сатурн API
+                    if (file != null && file.exists()) {
+                        Main.getInstance().sendDocument(chatId, file, "Готово, каталог Сатурн обработан ✅");
+                    } else {
+                        Main.getInstance().sendMessage(chatId, "❌ Не удалось сформировать файл по каталогу.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    Main.getInstance().sendMessage(chatId, "❌ Ошибка при обработке каталога: " + e.getMessage());
+                }
+            });
         }
 
 

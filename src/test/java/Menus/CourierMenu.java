@@ -21,7 +21,13 @@ public class CourierMenu {
                         new KeyboardButton(ECourierMenuBtn.ROUTES.getButtonText())
                 )
         );
-        Main.getInstance().sendKeyboard(update.message().chat().id(), Messages.adminMenu, buttons, true, false);
+        Main.getInstance().sendKeyboard(
+                update.message().chat().id(),
+                Messages.adminMenu,
+                buttons,
+                true,
+                false
+        );
     }
 
     public void open(Update update, String msg) {
@@ -30,10 +36,23 @@ public class CourierMenu {
                         new KeyboardButton(ECourierMenuBtn.ROUTES.getButtonText())
                 )
         );
-        Main.getInstance().sendKeyboard(update.message().chat().id(), msg, buttons, true, false);
+        Main.getInstance().sendKeyboard(
+                update.message().chat().id(),
+                msg,
+                buttons,
+                true,
+                false
+        );
     }
 
-    public static String getOrdersForTomorrowOrWeekend(List<Order> orders) {
+    /**
+     * Формирует текст с заказами на завтра (обычные дни) или
+     * на субботу и понедельник (если сегодня пятница).
+     *
+     * ПВЗ определяется по адресу заказа (поле order.address),
+     * если он содержит один из адресов из pvzAddresses.
+     */
+    public static String getOrdersForTomorrowOrWeekend(List<Order> orders, Set<String> pvzAddresses) {
         if (orders == null || orders.isEmpty()) {
             return "Заказов нет";
         }
@@ -46,7 +65,7 @@ public class CourierMenu {
 
         if (dayOfWeek == DayOfWeek.FRIDAY) {
             targetDates.add(today.plusDays(1)); // суббота
-            targetDates.add(today.plusDays(2)); // воскресенье
+            targetDates.add(today.plusDays(3)); // понедельник
         } else if (dayOfWeek == DayOfWeek.SATURDAY || dayOfWeek == DayOfWeek.SUNDAY) {
             return "Сегодня " + dayOfWeek.getDisplayName(TextStyle.FULL, Locale.forLanguageTag("ru")) +
                     ", заказы не выводятся";
@@ -57,23 +76,29 @@ public class CourierMenu {
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
         // структура: Дата -> (Водитель -> Список заказов)
-        Map<LocalDate, Map<String, List<String>>> ordersByDateAndDriver = new LinkedHashMap<>();
+        // TreeMap — чтобы даты шли по порядку (сначала суббота, потом понедельник)
+        Map<LocalDate, Map<String, List<String>>> ordersByDateAndDriver = new TreeMap<>();
 
         for (Order order : orders) {
-            if (order == null || order.deliveryDate == null || order.driver == null) continue;
+            if (order == null
+                    || order.deliveryDate == null || order.deliveryDate.isEmpty()
+                    || order.driver == null || order.driver.isEmpty()) {
+                continue;
+            }
 
             LocalDate deliveryDate;
             try {
                 deliveryDate = LocalDate.parse(order.deliveryDate.trim(), formatter);
-
             } catch (Exception e) {
                 continue;
             }
 
             if (targetDates.contains(deliveryDate)) {
-                // подготавливаем отображаемый номер
+                // короткий номер заказа (первое "слово")
                 String shortNum = simplifyOrderNumber(order.orderNumber);
-                String displayNum = hasPvzFlag(order.comment) ? shortNum + " (ПВЗ)" : shortNum;
+
+                boolean isPvz = hasPvzFlag(order, pvzAddresses);
+                String displayNum = isPvz ? shortNum + " (ПВЗ)" : shortNum;
 
                 ordersByDateAndDriver
                         .computeIfAbsent(deliveryDate, d -> new LinkedHashMap<>())
@@ -97,26 +122,53 @@ public class CourierMenu {
                 String shortName = toShortName(driverEntry.getKey());
                 sb.append("\n🚛 ").append(shortName).append("\n");
                 for (String orderNum : driverEntry.getValue()) {
-                    sb.append(" - ").append(simplifyOrderNumber(orderNum)).append("\n");
+                    sb.append(" - ").append(orderNum).append("\n");
                 }
             }
-
         }
 
         return sb.toString();
     }
 
-    private static boolean hasPvzFlag(String comment) {
-        if (comment == null) return false;
-        String norm = comment.toUpperCase(Locale.ROOT);
-        return norm.contains("FBS") || norm.contains("ПВЗ");
+    /**
+     * Определяем, что заказ — ПВЗ.
+     * Здесь используется адрес заказа:
+     * предполагается, что в классе Order есть поле address.
+     *
+     * Если у тебя оно называется по-другому (например deliveryAddress),
+     * просто замени order.address на нужное поле.
+     */
+    private static boolean hasPvzFlag(Order order, Set<String> pvzAddresses) {
+        if (order == null || pvzAddresses == null || pvzAddresses.isEmpty()) {
+            return false;
+        }
+
+        // !!! ЗДЕСЬ важное место: поле с адресом
+        // поменяй order.address на своё название поля, если нужно
+        String address = order.deliveryAddress; // <--- подстрой под свой класс Order
+
+        if (address == null || address.isEmpty()) {
+            return false;
+        }
+
+        String addrNorm = address.trim().toUpperCase(Locale.ROOT);
+
+        for (String pvzAddress : pvzAddresses) {
+            if (pvzAddress == null || pvzAddress.isEmpty()) continue;
+            String pvzNorm = pvzAddress.trim().toUpperCase(Locale.ROOT);
+            if (addrNorm.contains(pvzNorm)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static String toShortName(String fullName) {
         if (fullName == null) return "—";
         String[] parts = fullName.trim().split("\\s+");
         if (parts.length >= 2) return parts[0] + " " + parts[1];  // Имя Фамилия
-        return parts[0]; // одно слово — как есть
+        return parts[0];
     }
 
     private static String simplifyOrderNumber(String orderNum) {
@@ -124,6 +176,4 @@ public class CourierMenu {
         String[] parts = orderNum.trim().split("\\s+");
         return parts.length > 0 ? parts[0] : orderNum.trim();
     }
-
-
 }

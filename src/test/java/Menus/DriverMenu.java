@@ -6,6 +6,7 @@ import com.pengrad.telegrambot.request.SendMediaGroup;
 import core.Main;
 import modules.OrderLoader;
 import modules.OrderStatusUpdater;
+import modules.ReportManager;
 import modules.Routes;
 import utils.*;
 
@@ -183,7 +184,14 @@ public class DriverMenu {
 
                 OrderStatus status = OrderStatus.fromDisplayName(selected.orderStatus);
                 List<List<InlineKeyboardButton>> buttonsInline = new ArrayList<>();
-                if(status == null || (status == OrderStatus.RESCHEDULED || status == OrderStatus.HANDED_TO_MANAGER)) {
+                if(status == null || (status == OrderStatus.RESCHEDULED_BY_STORE ||
+                        status == OrderStatus.RESCHEDULED_BY_CLIENT ||
+                        status == OrderStatus.HANDED_TO_MANAGER ||
+                        status == OrderStatus.PARTIALLY_DELIVERED ||
+                        status == OrderStatus.NOT_SHIPPED_NO_SPACE ||
+                        status == OrderStatus.NOT_SHIPPED_NO_STOCK||
+                        status == OrderStatus.NOT_SHIPPED_NO_INVOICE||
+                        status == OrderStatus.NOT_SHIPPED_NOT_PICKED_FROM_DRIVER)) {
                     buttonsInline.add(List.of(
                             new InlineKeyboardButton("📦 Доставлено").callbackData("OrderStatus:DELIVERED:" + orderNum)
                     ));
@@ -291,9 +299,19 @@ public class DriverMenu {
                 OrderStatus status = OrderStatus.fromDisplayName(selected.orderStatus);
                 // Создаем кнопки для вариантов отмены
                 List<List<InlineKeyboardButton>> buttonsInline = new ArrayList<>();
-                if(status == null || (status == OrderStatus.RESCHEDULED || status == OrderStatus.HANDED_TO_MANAGER)) {
+                if(status == null || (status == OrderStatus.RESCHEDULED_BY_STORE ||
+                        status == OrderStatus.RESCHEDULED_BY_CLIENT ||
+                        status == OrderStatus.HANDED_TO_MANAGER ||
+                        status == OrderStatus.PARTIALLY_DELIVERED ||
+                        status == OrderStatus.NOT_SHIPPED_NO_SPACE ||
+                        status == OrderStatus.NOT_SHIPPED_NO_STOCK||
+                        status == OrderStatus.NOT_SHIPPED_NO_INVOICE||
+                        status == OrderStatus.NOT_SHIPPED_NOT_PICKED_FROM_DRIVER)) {
+
                     buttonsInline.add(List.of(
-                            new InlineKeyboardButton("✂\uFE0F Частично доставлен").callbackData("OrderStatus:PARTIALLY_DELIVERED:" + orderNum)
+                            new InlineKeyboardButton("✂\uFE0F Частично доставлен").callbackData("OrderStatus:PARTIALLY_DELIVERED:" + orderNum),
+                            new InlineKeyboardButton("🛑 Отмена при вручении").callbackData("OrderStatus:CANCELED_AT_HANDOVER:" + orderNum)
+
                     ));
 
                     buttonsInline.add(List.of(
@@ -301,9 +319,9 @@ public class DriverMenu {
                             new InlineKeyboardButton("📵 Не отвечает").callbackData("OrderStatus:NO_RESPONSE:" + orderNum)
                     ));
 
+
                     buttonsInline.add(List.of(
-                            new InlineKeyboardButton("↩️ Перенос").callbackData("OrderStatus:RESCHEDULED:" + orderNum),
-                            new InlineKeyboardButton("🛑 Отмена при вручении").callbackData("OrderStatus:CANCELED_AT_HANDOVER:" + orderNum)
+                            new InlineKeyboardButton("↩️ Перенос [Список]").callbackData("rescheduled_menu:" + orderNum)
                     ));
 
                     buttonsInline.add(List.of(
@@ -351,6 +369,29 @@ public class DriverMenu {
                     "Выберите причину «Товар не отгружен» для заказа №" + orderNum + ":", kb);
             return;
         }
+
+        if (data.startsWith("rescheduled_menu:")) {
+            String orderNum = data.substring("rescheduled_menu:".length());
+
+            List<List<InlineKeyboardButton>> kb = new ArrayList<>();
+            kb.add(List.of(
+                    new InlineKeyboardButton("👤 По просьбе клиента")
+                            .callbackData("OrderStatus:RESCHEDULED_BY_CLIENT:" + orderNum)
+            ));
+            kb.add(List.of(
+                    new InlineKeyboardButton("🏬 По вине магазина")
+                            .callbackData("OrderStatus:RESCHEDULED_BY_STORE:" + orderNum)
+            ));
+            kb.add(List.of(
+                    new InlineKeyboardButton("◀️ Назад")
+                            .callbackData("cancel_menu:" + orderNum)
+            ));
+
+            Main.getInstance().editMessage(chatId, messageId,
+                    "Выберите причину переноса для заказа №" + orderNum + ":", kb);
+            return;
+        }
+
 
         // Выбрана конкретная причина из "Товар не отгружен"
         if (data.startsWith("NotShipped:")) {
@@ -480,6 +521,7 @@ public class DriverMenu {
                 // Локально пометим выбранный статус и передадим «Менеджеру»
                 order.orderStatus = selectedStatus.getDisplayName();
                 OrderStatusUpdater.updateOrderStatus(order.orderNumber, OrderStatus.HANDED_TO_MANAGER.getDisplayName());
+                ManagerMenu.ManagerRequestStore.startTimer(managerName, orderNum, selectedStatus);
 
             } else {
                 Main.getInstance().editMessage(chatId, messageId,
@@ -537,80 +579,91 @@ public class DriverMenu {
             }
 
             // Если это статус отмены - отправляем запрос менеджеру
-            if (status == OrderStatus.NO_RESPONSE ||
-                    status == OrderStatus.CANCELED_BY_PHONE ||
-                    status == OrderStatus.CANCELED_AT_HANDOVER ||
-                    status == OrderStatus.RESCHEDULED || status == OrderStatus.PARTIALLY_DELIVERED) {
+            // Статусы, которые требуют подтверждения менеджером
+            if (status == OrderStatus.NO_RESPONSE
+                    || status == OrderStatus.CANCELED_BY_PHONE
+                    || status == OrderStatus.CANCELED_AT_HANDOVER
+                    || status == OrderStatus.RESCHEDULED_BY_CLIENT
+                    || status == OrderStatus.RESCHEDULED_BY_STORE
+                    || status == OrderStatus.PARTIALLY_DELIVERED) {
 
                 String driverName = currentUser != null ? currentUser.getName() : "Неизвестный водитель";
 
-
-                String cancelMessage = String.format(
-                        "🚨 %s запросил отмену заказа №%s\n" +
-                                "Причина: %s %s\n\n" +
-                                "Подтвердите или отклоните отмену:",
-                        driverName,
-                        orderNum,
-                        OrderStatus.getEmojiByStatus(status),
-                        status.getDisplayName()
-                );
-
-                if(status == OrderStatus.RESCHEDULED)
-                    cancelMessage = String.format(
-                            "🚨 %s запросил перенос заказа №%s\n" +
-                                    "Подтвердите или отклоните:",
+                String managerMessage;
+                if (status == OrderStatus.RESCHEDULED_BY_CLIENT || status == OrderStatus.RESCHEDULED_BY_STORE) {
+                    managerMessage = String.format(
+                            "🚨 %s запросил перенос заказа №%s\nПодтвердите или отклоните:",
+                            driverName, orderNum
+                    );
+                } else if (status == OrderStatus.PARTIALLY_DELIVERED) {
+                    managerMessage = String.format(
+                            "🚨 %s запросил отметку «%s %s» по заказу №%s\n\nПодтвердите или отклоните:",
+                            driverName,
+                            OrderStatus.getEmojiByStatus(status),
+                            status.getDisplayName(),
+                            orderNum
+                    );
+                } else {
+                    managerMessage = String.format(
+                            "🚨 %s запросил отмену заказа №%s\nПричина: %s %s\n\nПодтвердите или отклоните:",
                             driverName,
                             orderNum,
                             OrderStatus.getEmojiByStatus(status),
                             status.getDisplayName()
                     );
+                }
 
-                // Упрощаем номер заказа (убираем дату и пробелы)
-                String simplifiedOrderNum = orderNum.split(" ")[0]; // Берем только цифры до пробела
+                String simplifiedOrderNum = orderNum.split(" ")[0];
 
-// Формируем callback данные без пробелов и с сокращенными названиями
-                String confirmCallback = String.format("ManagerConfirm:%s:%s:%d",
-                        status.name(),
-                        simplifiedOrderNum,
-                        userId);
-                String rejectCallback = String.format("ManagerReject:%s:%d",
-                        simplifiedOrderNum,
-                        userId);
-
-                InlineKeyboardMarkup keyboard = new InlineKeyboardMarkup();
-                keyboard.addRow(
-                        new InlineKeyboardButton("✅ Подтвердить")
-                                .callbackData(confirmCallback),
-                        new InlineKeyboardButton("❌ Отклонить")
-                                .callbackData(rejectCallback)
+                String confirmCallback = String.format(
+                        "ManagerConfirm:%s:%s:%d",
+                        status.name(), simplifiedOrderNum, userId
                 );
+                String rejectCallback = String.format(
+                        "ManagerReject:%s:%d",
+                        simplifiedOrderNum, userId
+                );
+
+                InlineKeyboardMarkup keyboard = new InlineKeyboardMarkup()
+                        .addRow(
+                                new InlineKeyboardButton("✅ Подтвердить").callbackData(confirmCallback),
+                                new InlineKeyboardButton("❌ Отклонить").callbackData(rejectCallback)
+                        );
+
                 String manager = "";
                 boolean managerNotified = false;
                 for (UserData user : Main.users) {
                     if (user.getRole() != null && user.getRole().equalsIgnoreCase("MANAGER")) {
-                        if(order.clientManager.contains(user.getName())){
-                        Main.getInstance().sendMessage(user.getId(), cancelMessage, keyboard);
-                        managerNotified = true;
+                        if (order.clientManager != null && order.clientManager.contains(user.getName())) {
+                            Main.getInstance().sendMessage(user.getId(), managerMessage, keyboard);
+                            managerNotified = true;
                             manager = user.getName();
                         }
                     }
                 }
 
                 if (managerNotified) {
-                    if(status == OrderStatus.RESCHEDULED){
-                        Main.getInstance().editMessage(chatId, messageId,
-                                "Запрос на перенос заказа №" + orderNum + " отправлен менеджеру [" + manager + "]. Ожидайте подтверждения.");
-                    } else{
-                        Main.getInstance().editMessage(chatId, messageId,
-                                "Запрос на отмену заказа №" + orderNum + " отправлен менеджеру [" + manager + "]. Ожидайте подтверждения.");
+                    String sentMsg;
+                    if (status == OrderStatus.RESCHEDULED_BY_CLIENT || status == OrderStatus.RESCHEDULED_BY_STORE) {
+                        sentMsg = "Запрос на перенос заказа №" + orderNum + " отправлен менеджеру [" + manager + "]. Ожидайте подтверждения.";
+                    } else if (status == OrderStatus.PARTIALLY_DELIVERED) {
+                        sentMsg = "Запрос на отметку «Частично доставлен» по заказу №" + orderNum + " отправлен менеджеру [" + manager + "]. Ожидайте подтверждения.";
+                    } else {
+                        sentMsg = "Запрос на отмену заказа №" + orderNum + " отправлен менеджеру [" + manager + "]. Ожидайте подтверждения.";
                     }
+                    Main.getInstance().editMessage(chatId, messageId, sentMsg);
 
                     for (UserData user : Main.users) {
                         if (user.getRole() != null) {
                             String role = user.getRole().toUpperCase();
                             if (role.equals("LOGISTIC") || role.equals("ADMIN")) {
-                                if(user.getId() == null) return;
-                                Main.getInstance().sendMessage(user.getId(), "Водитель " + driverName + " по заказу " + orderNum + " отправил запрос на " + status.getDisplayName() + " менеджеру " + manager);
+                                if (user.getId() != null) {
+                                    Main.getInstance().sendMessage(
+                                            user.getId(),
+                                            "Водитель " + driverName + " по заказу " + orderNum +
+                                                    " отправил запрос: " + status.getDisplayName() + " менеджеру " + manager
+                                    );
+                                }
                             }
                         }
                     }
@@ -623,6 +676,7 @@ public class DriverMenu {
                 }
                 return;
             }
+
 
             String driverName = currentUser != null ? currentUser.getName() : "Неизвестный пользователь";
             String notifyText = String.format(
@@ -700,9 +754,16 @@ public class DriverMenu {
             }
             OrderStatus currentStatus = OrderStatus.fromDisplayName(order.orderStatus);
 
-            if (!order.orderStatus.isEmpty()
-                    && currentStatus != OrderStatus.RESCHEDULED
-                    && currentStatus != OrderStatus.HANDED_TO_MANAGER) {
+            if (!order.orderStatus.isEmpty() &&
+
+                    !(currentStatus == OrderStatus.RESCHEDULED_BY_STORE ||
+                            currentStatus == OrderStatus.RESCHEDULED_BY_CLIENT ||
+                            currentStatus == OrderStatus.HANDED_TO_MANAGER ||
+                            currentStatus == OrderStatus.PARTIALLY_DELIVERED ||
+                            currentStatus == OrderStatus.NOT_SHIPPED_NO_SPACE ||
+                            currentStatus == OrderStatus.NOT_SHIPPED_NO_STOCK||
+                            currentStatus == OrderStatus.NOT_SHIPPED_NO_INVOICE||
+                            currentStatus == OrderStatus.NOT_SHIPPED_NOT_PICKED_FROM_DRIVER)) {
                 Main.getInstance().editMessage(chatId, messageId, "Заказ уже имеет статус.");
                 return;
             }
@@ -721,6 +782,8 @@ public class DriverMenu {
                     orderNum,
                     driverName
             );
+
+            ReportManager.updateRouteStats(currentUser, dateToCheck);
 
             // Уведомляем логистов, админов и менеджеров
             for (UserData user : Main.users) {

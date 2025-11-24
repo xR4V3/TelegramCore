@@ -7,10 +7,8 @@ import modules.OrderLoader;
 import modules.OrderStatusUpdater;
 import utils.*;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDate;
+import java.util.*;
 
 public class ManagerMenu {
 
@@ -84,7 +82,8 @@ public class ManagerMenu {
                     status.getDisplayName()
             );
 
-            if(status == OrderStatus.RESCHEDULED)
+            if(status == OrderStatus.RESCHEDULED_BY_CLIENT ||
+                    status == OrderStatus.RESCHEDULED_BY_STORE)
                 driverMessage = String.format(
                         "✅ Ваш запрос на перенос заказа №%s подтвержден менеджером %s\n" +
                                 "Статус изменен на: %s %s",
@@ -108,9 +107,27 @@ public class ManagerMenu {
                     status.getDisplayName()
             );
 
-            if(status == OrderStatus.RESCHEDULED)
+            if(status == OrderStatus.RESCHEDULED_BY_CLIENT ||
+                    status == OrderStatus.RESCHEDULED_BY_STORE)
                 notifyText = String.format(
                         "🛑 Заказ №%s перенесен\n" +
+                                "Водитель: %s\n" +
+                                "Менеджер: %s\n" +
+                                "Причина: %s %s",
+                        orderNum,
+                        driverName,
+                        managerName,
+                        OrderStatus.getEmojiByStatus(status),
+                        status.getDisplayName()
+                );
+
+            if(status == OrderStatus.NOT_SHIPPED_NO_INVOICE ||
+                    status == OrderStatus.NOT_SHIPPED_NO_STOCK ||
+                    status == OrderStatus.NOT_SHIPPED_NO_SPACE ||
+                    status == OrderStatus.PARTIALLY_DELIVERED ||
+                    status == OrderStatus.NOT_SHIPPED_NOT_PICKED_FROM_DRIVER)
+                notifyText = String.format(
+                        "🛑 По заказу №%s изменен статус\n" +
                                 "Водитель: %s\n" +
                                 "Менеджер: %s\n" +
                                 "Причина: %s %s",
@@ -131,14 +148,28 @@ public class ManagerMenu {
                 }
             }
 
-            if(status == OrderStatus.RESCHEDULED){
+            if(status == OrderStatus.RESCHEDULED_BY_CLIENT ||
+                    status == OrderStatus.RESCHEDULED_BY_STORE){
                 // Обновляем сообщение менеджера
                 Main.getInstance().editMessage(
                         update.callbackQuery().message().chat().id(),
                         update.callbackQuery().message().messageId(),
                         "✅ Вы подтвердили перенос заказа №" + orderNum
                 );
-            } else{
+
+            }
+            else if(status == OrderStatus.NOT_SHIPPED_NO_INVOICE ||
+                    status == OrderStatus.NOT_SHIPPED_NO_STOCK ||
+                    status == OrderStatus.NOT_SHIPPED_NO_SPACE ||
+                    status == OrderStatus.PARTIALLY_DELIVERED ||
+                    status == OrderStatus.NOT_SHIPPED_NOT_PICKED_FROM_DRIVER){
+                Main.getInstance().editMessage(
+                        update.callbackQuery().message().chat().id(),
+                        update.callbackQuery().message().messageId(),
+                        "✅ Вы подтвердили статус заказа №" + orderNum
+                );
+            }
+            else{
                 // Обновляем сообщение менеджера
                 Main.getInstance().editMessage(
                         update.callbackQuery().message().chat().id(),
@@ -146,6 +177,21 @@ public class ManagerMenu {
                         "✅ Вы подтвердили отмену заказа №" + orderNum
                 );
             }
+
+            // измерим длительность
+            ManagerRequestStore.RequestInfo info = ManagerRequestStore.resolveAndRemove(orderNum);
+            long createdAt = (info != null ? info.createdAtMs : System.currentTimeMillis());
+            long durationMs = Math.max(0, System.currentTimeMillis() - createdAt);
+
+// найдём менеджера (вы уже нашли выше): manager
+            if (manager != null) {
+                LocalDate today = LocalDate.now(); // или дата запроса, если вы её храните отдельно
+                UserData.ManagerStats.ManagerDailyStats ms = manager.getManagerStats().getOrCreate(today);
+                // Подтверждение — считаем как "принято"
+                ms.addAccepted(durationMs);
+                UserData.saveUsersToFile();
+            }
+
 
         }
 
@@ -180,28 +226,69 @@ public class ManagerMenu {
                     update.callbackQuery().message().messageId(),
                     "❌ Вы отклонили запрос №" + orderNum + "\nВодитель: " + driverName
             );
+            // измерим длительность
+            ManagerRequestStore.RequestInfo info = ManagerRequestStore.resolveAndRemove(orderNum);
+            long createdAt = (info != null ? info.createdAtMs : System.currentTimeMillis());
+            long durationMs = Math.max(0, System.currentTimeMillis() - createdAt);
+
+// найдём менеджера (вы уже нашли выше): manager
+            if (manager != null) {
+                LocalDate today = LocalDate.now(); // или дата запроса, если вы её храните отдельно
+                UserData.ManagerStats.ManagerDailyStats ms = manager.getManagerStats().getOrCreate(today);
+                // Подтверждение — считаем как "принято"
+                ms.addAccepted(durationMs);
+                UserData.saveUsersToFile();
+            }
+
         }
 
     }
 
     public static class ManagerRequestStore {
-        // Ключ: "managerName:orderNum"
-        private static final Map<String, OrderStatus> activeRequests = new HashMap<>();
+        private static final Map<String, RequestInfo> activeRequests = new HashMap<>();
+        // Ключ: orderNum (или managerName:orderNum — но orderNum уникален для простоты)
+        private static String key(String orderNum) { return orderNum; }
+
+        public static void startTimer(String managerName, String orderNum, OrderStatus requestedStatus) {
+            String k = key(orderNum);
+            if (!activeRequests.containsKey(k)) {
+                activeRequests.put(k, new RequestInfo(managerName, orderNum, requestedStatus, System.currentTimeMillis()));
+            }
+        }
+
+        public static RequestInfo resolveAndRemove(String orderNum) {
+            return activeRequests.remove(key(orderNum));
+        }
 
         public static boolean hasActiveRequest(String managerName, String orderNum, OrderStatus status) {
-            String key = managerName + ":" + orderNum;
-            return activeRequests.containsKey(key) && activeRequests.get(key) == status;
+            RequestInfo info = activeRequests.get(key(orderNum));
+            return info != null && info.requestedStatus == status && Objects.equals(info.managerName, managerName);
         }
 
         public static void addRequest(String managerName, String orderNum, OrderStatus status) {
-            String key = managerName + ":" + orderNum;
-            activeRequests.put(key, status);
+            // совместимость со старым API: если кто-то вызывает — стартуем таймер
+            startTimer(managerName, orderNum, status);
         }
 
         public static void removeRequest(String managerName, String orderNum) {
-            activeRequests.remove(managerName + ":" + orderNum);
+            activeRequests.remove(key(orderNum));
+        }
+
+        public static class RequestInfo {
+            public final String managerName;
+            public final String orderNum;
+            public final OrderStatus requestedStatus;
+            public final long createdAtMs;
+
+            public RequestInfo(String managerName, String orderNum, OrderStatus requestedStatus, long createdAtMs) {
+                this.managerName = managerName;
+                this.orderNum = orderNum;
+                this.requestedStatus = requestedStatus;
+                this.createdAtMs = createdAtMs;
+            }
         }
     }
+
 
 
 }

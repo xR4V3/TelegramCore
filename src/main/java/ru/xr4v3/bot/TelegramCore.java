@@ -60,6 +60,14 @@ public abstract class TelegramCore {
         }
     }
 
+    public void sendDocument(Long chatId, File file, String caption) {
+        SendDocument req = new SendDocument(chatId, file);
+        if (caption != null && !caption.isEmpty()) {
+            req.caption(caption).parseMode(ParseMode.Markdown);
+        }
+        bot.execute(req);
+    }
+
     public void sendMessage(Long chatId, String text) {
         bot.execute(new SendMessage(chatId, text));
     }

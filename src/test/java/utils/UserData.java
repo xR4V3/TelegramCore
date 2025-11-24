@@ -1,5 +1,6 @@
 package utils;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.annotation.Nulls;
@@ -57,6 +58,11 @@ public class UserData {
         this.id = id;
     }
 
+    private String pendingAction;
+    public void setPendingAction(String a) { this.pendingAction = a; }
+    public String getPendingAction() { return pendingAction; }
+
+
     // Карта статусов маршрутов по дате
     public Map<LocalDate, RouteStatus> routes = new HashMap<>();
 
@@ -88,6 +94,14 @@ public class UserData {
 
     public void setRouteStatus(LocalDate date, RouteStatus status) {
         routes.put(date, status);
+        saveUsersToFile();
+    }
+
+    private RouteStats routeStats = new RouteStats();
+
+    public RouteStats getRouteStats() { return routeStats; }
+    public void setRouteStats(RouteStats routeStats) {
+        this.routeStats = routeStats;
         saveUsersToFile();
     }
 
@@ -205,6 +219,119 @@ public class UserData {
             if (status.confirmed) return "✅";
             if (status.requested) return "⏳";
             return "";
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class RouteStats {
+        private Map<LocalDate, DailyStats> dailyStats = new HashMap<>();
+
+        // Статистика за день
+        public static class DailyStats {
+            private int totalOrders;
+            private int completedOrders;
+            private double totalOrderValue;
+            private double completedOrderValue;
+            private LocalDate date;
+
+            // constructors, getters, setters
+            public DailyStats() {}
+
+            public DailyStats(LocalDate date) {
+                this.date = date;
+            }
+
+            public void addOrder(double value) {
+                this.totalOrders++;
+                this.totalOrderValue += value;
+            }
+
+            public void addCompletedOrder(double value) {
+                this.completedOrders++;
+                this.completedOrderValue += value;
+            }
+            @JsonIgnore
+            public double getCompletionRateByCount() {
+                return totalOrders == 0 ? 0 : (double) completedOrders / totalOrders * 100;
+            }
+
+            @JsonIgnore
+            public double getCompletionRateByValue() {
+                return totalOrderValue == 0 ? 0 : completedOrderValue / totalOrderValue * 100;
+            }
+
+            public void reset() {
+                this.totalOrders = 0;
+                this.completedOrders = 0;
+                this.totalOrderValue = 0.0;
+                this.completedOrderValue = 0.0;
+            }
+
+            // Getters and setters
+            public int getTotalOrders() { return totalOrders; }
+            public void setTotalOrders(int totalOrders) { this.totalOrders = totalOrders; }
+
+            public int getCompletedOrders() { return completedOrders; }
+            public void setCompletedOrders(int completedOrders) { this.completedOrders = completedOrders; }
+
+            public double getTotalOrderValue() { return totalOrderValue; }
+            public void setTotalOrderValue(double totalOrderValue) { this.totalOrderValue = totalOrderValue; }
+
+            public double getCompletedOrderValue() { return completedOrderValue; }
+            public void setCompletedOrderValue(double completedOrderValue) { this.completedOrderValue = completedOrderValue; }
+
+            public LocalDate getDate() { return date; }
+            public void setDate(LocalDate date) { this.date = date; }
+        }
+
+        public Map<LocalDate, DailyStats> getDailyStats() { return dailyStats; }
+        public void setDailyStats(Map<LocalDate, DailyStats> dailyStats) { this.dailyStats = dailyStats; }
+
+        public DailyStats getOrCreateDailyStats(LocalDate date) {
+            return dailyStats.computeIfAbsent(date, DailyStats::new);
+        }
+    }
+
+    // Внутри UserData
+    private ManagerStats managerStats = new ManagerStats();
+    public ManagerStats getManagerStats() { return managerStats; }
+    public void setManagerStats(ManagerStats managerStats) { this.managerStats = managerStats; saveUsersToFile(); }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ManagerStats {
+        private Map<LocalDate, ManagerDailyStats> daily = new HashMap<>();
+        public Map<LocalDate, ManagerDailyStats> getDaily() { return daily; }
+        public void setDaily(Map<LocalDate, ManagerDailyStats> daily) { this.daily = daily; }
+
+        public ManagerDailyStats getOrCreate(LocalDate d) { return daily.computeIfAbsent(d, ManagerDailyStats::new); }
+
+        public static class ManagerDailyStats {
+            private int accepted;            // принятые запросы (подтверждено)
+            private int rejected;            // отклонённые запросы
+            private long totalResponseMs;    // суммарное время ответа (мс)
+            private int responses;           // количество ответов (для среднего)
+            private LocalDate date;
+
+            public ManagerDailyStats() {}
+            public ManagerDailyStats(LocalDate date) { this.date = date; }
+
+            public void addAccepted(long durationMs) { accepted++; totalResponseMs += durationMs; responses++; }
+            public void addRejected(long durationMs) { rejected++; totalResponseMs += durationMs; responses++; }
+
+            @JsonIgnore
+            public double getAvgResponseMinutes() { return responses == 0 ? 0 : (totalResponseMs / 60000.0) / responses; }
+
+            // getters/setters
+            public int getAccepted() { return accepted; }
+            public void setAccepted(int accepted) { this.accepted = accepted; }
+            public int getRejected() { return rejected; }
+            public void setRejected(int rejected) { this.rejected = rejected; }
+            public long getTotalResponseMs() { return totalResponseMs; }
+            public void setTotalResponseMs(long totalResponseMs) { this.totalResponseMs = totalResponseMs; }
+            public int getResponses() { return responses; }
+            public void setResponses(int responses) { this.responses = responses; }
+            public LocalDate getDate() { return date; }
+            public void setDate(LocalDate date) { this.date = date; }
         }
     }
 

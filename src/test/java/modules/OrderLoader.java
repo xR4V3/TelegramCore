@@ -65,6 +65,20 @@ public class OrderLoader {
 
         updateDriverRoutes(orders, Main.users);
 
+        LocalDate today = adjustSunday(LocalDate.now());
+        if (Main.users != null) {
+            for (UserData u : Main.users) {
+                if (u.getRole() != null && u.getRole().equalsIgnoreCase("DRIVER")) {
+                    try {
+                        ReportManager.updateRouteStats(u, today);
+                    } catch (Exception ex) {
+                        System.err.println("Ошибка пересчета статистики для " +
+                                (u.getName() != null ? u.getName() : "—") + " на " + today + ": " + ex.getMessage());
+                    }
+                }
+            }
+        }
+        PayrollManager.refreshAllNow();
     }
 
     public static Order loadSingleOrder(String folderPath, String orderNumber) {
@@ -97,12 +111,9 @@ public class OrderLoader {
             throw new IOException("Папка не найдена: " + folderPath);
         }
 
-
         LocalDate today = adjustSunday(LocalDate.now());
-
         LocalDate yesterday = adjustSunday(today.minusDays(1));
         LocalDate dayBeforeYesterday = adjustSunday(yesterday.minusDays(1));
-
         LocalDate tomorrow = adjustSunday(today.plusDays(1));
         LocalDate dayAfterTomorrow = adjustSunday(tomorrow.plusDays(1));
 
@@ -112,20 +123,43 @@ public class OrderLoader {
                     Order order = mapper.readValue(file.toFile(), Order.class);
 
                     if (!loadAll) {
-                        String dateStr = order.deliveryDate; // замените на актуальное поле
-                        LocalDate orderDate = parseDateSafely(dateStr);
+                        LocalDate orderDate = parseDateSafely(order.deliveryDate);
 
-                        if (orderDate == null ||
-                                (!orderDate.equals(today) &&
-                                        !orderDate.equals(yesterday) &&
-                                        !orderDate.equals(dayBeforeYesterday) &&
-                                        !orderDate.equals(tomorrow) &&
-                                        !orderDate.equals(dayAfterTomorrow))) {
+                        boolean inWindow =
+                                orderDate != null &&
+                                        (orderDate.equals(today)
+                                                || orderDate.equals(yesterday)
+                                                || orderDate.equals(dayBeforeYesterday)
+                                                || orderDate.equals(tomorrow)
+                                                || orderDate.equals(dayAfterTomorrow));
+
+                        boolean hasReturns = hasAnyReturns(order);
+
+                        // берём заказ либо если он в окне дат, либо если в нём есть возвраты
+                        if (!inWindow && !hasReturns) {
                             continue;
                         }
                     }
 
                     orderList.add(order);
+
+                    DateTimeFormatter statusFmt = DateTimeFormatter.ofPattern("dd.MM.yyyy");
+                    String todayStr = adjustSunday(LocalDate.now()).format(statusFmt);
+
+                    if (order.supplierOrders != null) {
+                        for (Order.SupplierOrder so : order.supplierOrders) {
+                            if (so == null || so.returns == null) continue;
+                            for (Order.ReturnItem r : so.returns) {
+                                if (r == null) continue;
+                                String st = (r.status == null ? "" : r.status.trim());
+                                // если статус пуст и это не "Сдал" — пишем сегодняшнюю дату
+                                if (st.isEmpty()) {
+                                    r.status = todayStr;
+                                    OrderStatusUpdater.updateReturnStatus(r.returnNumber, r.status);
+                                }
+                            }
+                        }
+                    }
                 } catch (Exception e) {
                     System.err.println("Ошибка при чтении файла " + file.getFileName() + ": " + e.getMessage());
                 }
@@ -133,6 +167,28 @@ public class OrderLoader {
         }
 
         return orderList;
+    }
+
+    /** Есть ли вообще возвраты в заказе (в любом из ЗаказыПоставщику) */
+    private static boolean hasAnyReturns(Order order) {
+        if (order == null || order.supplierOrders == null) return false;
+        for (Order.SupplierOrder so : order.supplierOrders) {
+            if (so != null && so.returns != null && !so.returns.isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /** Есть ли возвраты для конкретного водителя (по contains имени) */
+    public static boolean hasReturnsForDriver(Order order, String driverName) {
+        if (order == null || order.supplierOrders == null || driverName == null || driverName.isBlank()) return false;
+        for (Order.SupplierOrder so : order.supplierOrders) {
+            if (so == null || so.returns == null) continue;
+            for (Order.ReturnItem r : so.returns) {
+                String rd = (r == null ? "" : (r.returnDriver == null ? "" : r.returnDriver));
+                if (!rd.isBlank() && rd.contains(driverName)) return true;
+            }
+        }
+        return false;
     }
 
     public static void updateDriverRoutes(List<Order> orders, List<UserData> drivers) {
@@ -173,8 +229,20 @@ public class OrderLoader {
                 } else {
                     if(!driver.getRoutes().containsKey(date)) {
                         driver.addRoute(date);
+                        for (Order o : driverOrders){
+                            System.out.println(o.orderNumber + " " + o.driver);
+
+                        }
                         System.out.println("Добавлен маршрут у " + driver.getName() + " на " + date.format(formatter) +
                                 ", заказов: " + driverOrders.size());
+                    }
+
+                    if(LocalDate.now().equals(date) && driver.getRoutes().containsKey(date)) {
+                        if(!driver.getRouteStatus(date).isRequested() && !driver.getRouteStatus(date).isConfirmed()){
+                            driver.getRouteStatus(date).setConfirmed(true);
+                            System.out.println("Автоматически принят маршрут у " + driver.getName() + " на " + date.format(formatter) +
+                                    ", заказов: " + driverOrders.size());
+                        }
                     }
                 }
 
@@ -188,6 +256,54 @@ public class OrderLoader {
                 System.out.println("Удален старый маршрут у " + driver.getName() + " на " + oldDate.format(formatter));
             }
         }
+    }
+
+    // --- ФОТО ДЛЯ ВОЗВРАТОВ ---
+
+    public static void saveReturnPhotoToLocal(String fileId, String returnNumber) {
+        try {
+            InputStream inputStream = Main.getInstance().downloadFile(fileId);
+
+            String extension = ".jpg";
+            String folderPath = "img_returns/";
+            new File(folderPath).mkdirs();
+
+            String sanitized = (returnNumber == null ? "unknown" : returnNumber.trim());
+            String baseName = folderPath + sanitized;
+            File outFile = new File(baseName + extension);
+
+            int i = 1;
+            while (outFile.exists()) {
+                outFile = new File(baseName + "_" + i + extension);
+                i++;
+            }
+
+            try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                byte[] buffer = new byte[4096];
+                int len;
+                while ((len = inputStream.read(buffer)) != -1) {
+                    fos.write(buffer, 0, len);
+                }
+            }
+
+            System.out.println("✅ Фото возврата сохранено: " + outFile.getAbsolutePath());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static List<File> getReturnPhotos(String returnNumber) {
+        if (returnNumber == null || returnNumber.isBlank()) return List.of();
+        File folder = new File("img_returns");
+        File[] files = folder.listFiles((dir, name) -> name.startsWith(returnNumber));
+        return files != null ? List.of(files) : List.of();
+    }
+
+    public static boolean hasPhotoInReturn(String returnNumber) {
+        if (returnNumber == null || returnNumber.isBlank()) return false;
+        File folder = new File("img_returns");
+        File[] files = folder.listFiles((dir, name) -> name.startsWith(returnNumber));
+        return files != null && files.length > 0;
     }
 
 
@@ -251,7 +367,13 @@ public class OrderLoader {
 
             if (orderDate.equals(targetDate)) {
                 boolean noStatus = (order.orderStatus == null || order.orderStatus.trim().isEmpty());
-                if (noStatus) {
+
+                // новый блок: если доставлен — проверяем наличие фото
+                OrderStatus st = OrderStatus.fromDisplayName(order.orderStatus);
+                boolean isDelivered = (st == OrderStatus.DELIVERED);
+                boolean deliveredButNoPhoto = isDelivered && !hasPhotoInOrder(order.orderNumber);
+
+                if (noStatus || deliveredButNoPhoto) {
                     return true; // проблема найдена
                 }
             }
@@ -274,7 +396,7 @@ public class OrderLoader {
 
         for (Order order : orders) {
             if (order.driver == null || order.deliveryDate == null) continue;
-            if (!order.driver.trim().equalsIgnoreCase(driverName.trim())) continue;
+            if (!order.driver.trim().contains(driverName.trim())) continue;
 
             LocalDate orderDate;
             try {
@@ -285,7 +407,13 @@ public class OrderLoader {
 
             if (orderDate.equals(targetDate)) {
                 boolean noStatus = (order.orderStatus == null || order.orderStatus.trim().isEmpty());
-                if (noStatus) {
+
+                // новый блок: если доставлен — проверяем наличие фото
+                OrderStatus st = OrderStatus.fromDisplayName(order.orderStatus);
+                boolean isDelivered = (st == OrderStatus.DELIVERED);
+                boolean deliveredButNoPhoto = isDelivered && !hasPhotoInOrder(order.orderNumber);
+
+                if (noStatus || deliveredButNoPhoto) {
                     problemOrders.add(order.orderNumber != null ? order.orderNumber.trim() : "Неизвестно");
                 }
             }
@@ -393,7 +521,7 @@ public class OrderLoader {
         routeRow3.add(new InlineKeyboardButton("\uD83E\uDDFE Счета").callbackData("rc:"  + driver.getId() + ":" + date));
         keyboard.add(routeRow3);
 
-        if(!driver.getRouteStatus(date).isFinished()) {
+        if(!driver.getRouteStatus(date).isFinished() && driver.getRole().equalsIgnoreCase("DRIVER")) {
             List<InlineKeyboardButton> routeRow = new ArrayList<>();
             routeRow.add(new InlineKeyboardButton("🏁 Завершить маршрут").callbackData("route:finish:" + date));
             keyboard.add(routeRow);
@@ -405,15 +533,8 @@ public class OrderLoader {
         return keyboard;
     }
 
-
     public static void drivers(Update update) {
-        List<String> driverNames = orders.stream()
-                .map(o -> o.driver)
-                .filter(name -> name != null && !name.trim().isEmpty())
-                .distinct()
-                .toList();
-
-        if (driverNames.isEmpty()) {
+        if (orders == null || orders.isEmpty()) {
             if (update.callbackQuery() != null) {
                 Main.getInstance().editMessage(update.callbackQuery().message().chat().id(),
                         update.callbackQuery().message().messageId(),
@@ -424,26 +545,64 @@ public class OrderLoader {
             return;
         }
 
+        // Сырые имена водителей из заказов
+        List<String> rawDriverNames = orders.stream()
+                .map(o -> o.driver)
+                .filter(name -> name != null && !name.trim().isEmpty())
+                .toList();
 
+        if (rawDriverNames.isEmpty()) {
+            if (update.callbackQuery() != null) {
+                Main.getInstance().editMessage(update.callbackQuery().message().chat().id(),
+                        update.callbackQuery().message().messageId(),
+                        "🚫 Водители не найдены.");
+            } else {
+                Main.getInstance().sendMessage(update.message().chat().id(), "🚫 Водители не найдены.");
+            }
+            return;
+        }
 
         List<List<InlineKeyboardButton>> keyboard = new ArrayList<>();
         List<InlineKeyboardButton> row = new ArrayList<>();
+        LocalDate today = LocalDate.now();
 
+        // Множество уже добавленных водителей (по ID), чтобы не было дублей
+        java.util.Set<Long> usedDriverIds = new java.util.HashSet<>();
 
-
-        for (String name : driverNames) {
+        for (String name : rawDriverNames) {
+            // Убираем теги, телефоны и т.п.
             String nameOnly = name.replaceAll("[(@+].*$", "").trim();
+            if (nameOnly.isEmpty()) continue;
 
             String[] parts = nameOnly.split("\\s+");
             String shortName = parts.length >= 2 ? parts[0] + " " + parts[1] : nameOnly;
+
             UserData driver = UserData.findUserByName(shortName);
-            if(driver == null) continue;
-            InlineKeyboardButton button = new InlineKeyboardButton("🚚 " + shortName)
+            if (driver == null) continue;
+
+            // Если такого водителя уже добавили — пропускаем
+            if (!usedDriverIds.add(driver.getId())) {
+                continue;
+            }
+
+            String emoji = "";
+            var rs = driver.getRouteStatus(today);
+            boolean hasRoute = driver.getRoutes() != null && driver.getRoutes().containsKey(today);
+
+            if (rs != null && rs.isFinished()) {
+                emoji = "🏁 ";
+            } else if (rs != null && rs.isStarted()) {
+                emoji = "🚛 ";
+            } else if (hasRoute) {
+                emoji = "⏳ ";
+            }
+
+            InlineKeyboardButton button = new InlineKeyboardButton(emoji + shortName)
                     .callbackData("driver:" + driver.getId());
             row.add(button);
 
             if (row.size() == 2) {
-                keyboard.add(new ArrayList<>(row)); // добавляем строку из 2 кнопок
+                keyboard.add(new ArrayList<>(row));
                 row.clear();
             }
         }
@@ -452,27 +611,36 @@ public class OrderLoader {
             keyboard.add(new ArrayList<>(row));
         }
 
+        if (keyboard.isEmpty()) {
+            if (update.callbackQuery() != null) {
+                Main.getInstance().editMessage(update.callbackQuery().message().chat().id(),
+                        update.callbackQuery().message().messageId(),
+                        "🚫 Водители не найдены.");
+            } else {
+                Main.getInstance().sendMessage(update.message().chat().id(), "🚫 Водители не найдены.");
+            }
+            return;
+        }
+
         Long userId;
         if (update.message() != null && update.message().from() != null) {
             userId = update.message().from().id();
         } else if (update.callbackQuery() != null && update.callbackQuery().from() != null) {
             userId = update.callbackQuery().from().id();
         } else {
-            // fallback или выброс исключения
             throw new RuntimeException("Не удалось определить пользователя.");
         }
 
         UserData currentUser = UserData.findUserById(userId);
-        if(currentUser.getRole().equals("LOGISTIC")){
+        if (currentUser.getRole().equalsIgnoreCase("LOGISTIC")) {
             keyboard.add(Arrays.asList(
                     new InlineKeyboardButton("➕ Добавить водителя").callbackData("drivers:add"),
                     new InlineKeyboardButton("🔍 Найти заказ").callbackData("order:find")
             ));
-        } else{
+        } else {
             keyboard.add(Collections.singletonList(
                     new InlineKeyboardButton("🔍 Найти заказ").callbackData("order:find")
             ));
-
         }
 
         if (update.callbackQuery() != null) {
@@ -480,12 +648,14 @@ public class OrderLoader {
                     update.callbackQuery().message().chat().id(),
                     update.callbackQuery().message().messageId(),
                     "👷 Выберите водителя:",
-                    keyboard);
+                    keyboard
+            );
         } else {
             Main.getInstance().sendInlineKeyboard(
                     update.message().chat().id(),
                     keyboard,
-                    "👷 Выберите водителя:");
+                    "👷 Выберите водителя:"
+            );
         }
     }
 

@@ -17,7 +17,7 @@ public class LogistMenu {
                 ),
                 Arrays.asList(
                         new KeyboardButton(ELogistMenuBtn.SALARIES.getButtonText()),
-                        new KeyboardButton(ELogistMenuBtn.FINES.getButtonText())
+                        new KeyboardButton(ELogistMenuBtn.OTHER.getButtonText())
                 )
         );
         Main.getInstance().sendKeyboard(update.message().chat().id(), Messages.logistMenu, buttons, true, false);
@@ -31,7 +31,7 @@ public class LogistMenu {
                 ),
                 Arrays.asList(
                         new KeyboardButton(ELogistMenuBtn.SALARIES.getButtonText()),
-                        new KeyboardButton(ELogistMenuBtn.FINES.getButtonText())
+                        new KeyboardButton(ELogistMenuBtn.OTHER.getButtonText())
                 )
         );
         Main.getInstance().sendKeyboard(update.message().chat().id(), msg, buttons, true, false);

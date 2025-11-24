@@ -152,4 +152,99 @@ public class OrderStatusUpdater {
         return false;
     }
 
+    public static synchronized boolean updateReturnStatus(String targetReturnNumber, String newStatus) {
+        ObjectMapper mapper = new ObjectMapper();
+        Path ordersDir = Paths.get("orders");
+
+        if (!Files.exists(ordersDir) || !Files.isDirectory(ordersDir)) {
+            System.err.println("Папка заказов не найдена: " + ordersDir.toAbsolutePath());
+            return false;
+        }
+
+        if (targetReturnNumber == null || targetReturnNumber.trim().isEmpty()) {
+            System.err.println("Пустой номер возврата.");
+            return false;
+        }
+
+        String target = targetReturnNumber.trim();
+
+        DateTimeFormatter auditFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        String auditLineTemplate = "[%s] Возврат %s (заказ %s): статус изменён с \"%s\" на \"%s\"%n";
+
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(ordersDir, "*.json")) {
+            for (Path file : stream) {
+                try {
+                    Order order = mapper.readValue(file.toFile(), Order.class);
+                    if (order == null || order.supplierOrders == null || order.supplierOrders.isEmpty()) {
+                        continue;
+                    }
+
+                    boolean updatedInThisFile = false;
+                    String orderNumForLog = (order.orderNumber == null ? "—" : order.orderNumber.trim());
+
+                    // Ищем по всем поставкам и их возвратам
+                    for (Order.SupplierOrder so : order.supplierOrders) {
+                        if (so == null || so.returns == null || so.returns.isEmpty()) continue;
+
+                        for (Order.ReturnItem ri : so.returns) {
+                            if (ri == null) continue;
+
+                            String rNum = (ri.returnNumber == null ? "" : ri.returnNumber.trim());
+                            if (!rNum.equals(target)) continue;
+
+                            String oldStatus = ri.status;
+
+                            // Если уже такой же статус — считаем успехом и выходим
+                            if (oldStatus != null && oldStatus.equals(newStatus)) {
+                                return true;
+                            }
+
+                            // Обновляем
+                            ri.status = newStatus;
+                            updatedInThisFile = true;
+
+                            // Делаем бэкап файла
+                            Path backup = file.resolveSibling(file.getFileName().toString() + ".bak");
+                            Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
+
+                            // Перезаписываем файл
+                            mapper.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), order);
+
+                            // Пишем в аудит-лог
+                            String timestamp = java.time.LocalDateTime.now().format(auditFormatter);
+                            String auditLine = String.format(
+                                    auditLineTemplate,
+                                    timestamp,
+                                    target,
+                                    orderNumForLog,
+                                    oldStatus,
+                                    newStatus
+                            );
+                            Files.writeString(
+                                    Paths.get("", "return_status_audit.log"),
+                                    auditLine,
+                                    StandardOpenOption.CREATE, StandardOpenOption.APPEND
+                            );
+
+                            System.out.println("Статус возврата обновлён: " + target + " -> " + newStatus
+                                    + " (заказ " + orderNumForLog + ")");
+                            return true; // нашли и обновили — выходим
+                        }
+                    }
+
+                    // если в файле не нашли — идём дальше
+                } catch (Exception e) {
+                    System.err.println("Ошибка при обработке файла " + file.getFileName() + ": " + e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Ошибка доступа к папке заказов: " + e.getMessage());
+            return false;
+        }
+
+        System.err.println("Возврат не найден: " + targetReturnNumber);
+        return false;
+    }
+
+
 }

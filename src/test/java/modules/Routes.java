@@ -229,6 +229,8 @@ public class Routes {
             String accepted = user.getRouteStatus(chosenDate).isConfirmed() ? " ✅" : "";
             String requested = user.getRouteStatus(chosenDate).isRequested() ? " ⏳" : "";
 
+            if(user.getId() == null) continue;
+
             long driverID = user.getId();
             InlineKeyboardButton btn = new InlineKeyboardButton(accepted + requested + shortName)
                     .callbackData("routes:driver:" + driverID);
@@ -440,10 +442,18 @@ public class Routes {
         if (keyboard.isEmpty()) {
             messageText = "📋 У водителя " + driverName + " нет маршрутов!";
         }
+        UserData driver = UserData.findUserByName(driverName);
+        int returns = ReturnsManager.countUndoneReturnsForDriver(driver);
+        String amount =  returns > 0 ? returns + " шт" : "";
+        // 🔁 Возвраты (просмотр возвратов выбранного водителя)
+        keyboard.add(Collections.singletonList(
+                new InlineKeyboardButton("🔁 Возвраты " + amount).callbackData("returns:list:" + user.getId())
+        ));
 
-        InlineKeyboardButton btn = new InlineKeyboardButton("◀\uFE0F Назад")
-                .callbackData("get_routes_back");
-        keyboard.add(Collections.singletonList(btn));
+        // ◀️ Назад
+        keyboard.add(Collections.singletonList(
+                new InlineKeyboardButton("◀️ Назад").callbackData("get_routes_back")
+        ));
 
         if (update.callbackQuery() != null) {
             Main.getInstance().editMessage(
@@ -509,7 +519,9 @@ public class Routes {
     }
 
     public static void showDriverRoute(Update update, String driverName) {
-        long chatId = (update.message() != null) ? update.message().chat().id() : update.callbackQuery().message().chat().id();
+        long chatId = (update.message() != null)
+                ? update.message().chat().id()
+                : update.callbackQuery().message().chat().id();
 
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yyyy");
         LocalDate today = LocalDate.now();
@@ -520,7 +532,7 @@ public class Routes {
             targetDates.add(today.plusDays(1)); // суббота
             targetDates.add(today.plusDays(3)); // понедельник
         } else {
-            targetDates.add(getNextWorkday()); // обычный случай (с учётом воскресенья)
+            targetDates.add(getNextWorkday());  // обычный случай (с учётом воскресенья)
         }
 
         List<Order> allOrders = OrderLoader.orders;
@@ -551,87 +563,92 @@ public class Routes {
             if (dayOrders.isEmpty()) {
                 sb.append("📦 У водителя ").append(driverName).append(" нет маршрута на ")
                         .append(targetDate.format(DATE_FORMATTER)).append(".\n\n");
-                continue;
-            }
+                // даже если заказов нет — «Счета» на эту дату могут быть, кнопку всё равно покажем ниже
+            } else {
+                sb.append("📦 Маршрут ").append(driverName).append(" на ")
+                        .append(targetDate.format(DATE_FORMATTER)).append(":\n\n");
 
-            sb.append("📦 Маршрут ").append(driverName).append(" на ").append(targetDate.format(DATE_FORMATTER)).append(":\n\n");
-            List<String> warehouses = getWarehousesForDriverDate(driverName, targetDate);
-            if (!warehouses.isEmpty()) {
-                sb.append("🏭 Точки погрузки:\n");
-                for (String w : warehouses) {
-                    sb.append("• ").append(w).append("\n");
-                }
-                sb.append("\n");
-            }
-            sb.append("📬 Доставки:\n\n");
-
-            double totalWeight = 0.0;
-            double totalVolume = 0.0;
-            int orderCount = 0;
-            double maxLength = 0.0;
-
-            for (Order o : dayOrders) {
-                orderCount++;
-                sb.append("• ").append(o.deliveryAddress != null ? o.deliveryAddress : "Адрес не указан").append("\n");
-                sb.append("  Вес: ").append(o.weight != null ? o.weight : "не указан");
-
-                if (o.length != null) {
-                    double currentLength = parseDoubleSafe(o.length);
-                    if (currentLength > maxLength) {
-                        maxLength = currentLength;
+                List<String> warehouses = getWarehousesForDriverDate(driverName, targetDate);
+                if (!warehouses.isEmpty()) {
+                    sb.append("🏭 Точки погрузки:\n");
+                    for (String w : warehouses) {
+                        sb.append("• ").append(w).append("\n");
                     }
-                    sb.append("  Габариты: ").append(currentLength).append(" м");
+                    sb.append("\n");
+                }
+                sb.append("📬 Доставки:\n\n");
+
+                double totalWeight = 0.0;
+                double totalVolume = 0.0;
+                int orderCount = 0;
+                double maxLength = 0.0;
+
+                for (Order o : dayOrders) {
+                    orderCount++;
+                    sb.append("• ").append(o.deliveryAddress != null ? o.deliveryAddress : "Адрес не указан").append("\n");
+                    sb.append("  Вес: ").append(o.weight != null ? o.weight : "не указан");
+
+                    if (o.length != null) {
+                        double currentLength = parseDoubleSafe(o.length);
+                        if (currentLength > maxLength) {
+                            maxLength = currentLength;
+                        }
+                        sb.append("  Габариты: ").append(currentLength).append(" м");
+                    }
+
+                    if (o.volume != null) {
+                        sb.append("  Объем: ").append(o.volume).append(" м³");
+                    }
+
+                    totalWeight += parseDoubleSafe(o.weight);
+                    totalVolume += parseDoubleSafe(o.volume);
+                    if (o.unloading != null && !o.unloading.isBlank()) {
+                        sb.append(" \n  ").append(o.unloading.trim()).append("\n");
+                    } else {
+                        sb.append(" \n  —\n");
+                    }
+                    sb.append("\n");
                 }
 
-                if (o.volume != null) {
-                    sb.append("  Объем: ").append(o.volume).append(" м³");
-                }
+                int warehousePoints = (int) OrderLoader.orders.stream()
+                        .filter(o -> o.supplierOrders != null)
+                        .flatMap(o -> o.supplierOrders.stream())
+                        .filter(so -> {
+                            try {
+                                return so.loadingDate != null
+                                        && !so.loadingDate.isBlank()
+                                        && LocalDate.parse(so.loadingDate.substring(0, 10)).equals(targetDate)
+                                        && so.loadingDriver != null
+                                        && so.loadingDriver.contains(driverName);
+                            } catch (Exception e) { return false; }
+                        })
+                        .map(so -> so.supplierWarehouse != null ? so.supplierWarehouse.trim() : "")
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toSet())
+                        .size();
 
+                int totalPoints = orderCount + warehousePoints;
 
-                totalWeight += parseDoubleSafe(o.weight);
-                totalVolume += parseDoubleSafe(o.volume);
-                if (o.unloading != null && !o.unloading.isBlank()) {
-                    sb.append(" \n  ").append(o.unloading.trim()).append("\n");
-                } else {
-                    sb.append(" \n  —\n");
-                }
-                sb.append("\n");
-
+                sb.append("📊 Итого:\n");
+                sb.append("  Количество точек: ").append(totalPoints).append("\n");
+                sb.append("  Вес: ").append(String.format("%.2f", totalWeight)).append(" кг\n");
+                sb.append("  Объем: ").append(String.format("%.2f", totalVolume)).append(" м³\n");
+                sb.append("  Длина (макс.): ").append(String.format("%.2f", maxLength)).append(" м\n");
             }
 
-            int warehousePoints = (int) OrderLoader.orders.stream()
-                    .filter(o -> o.supplierOrders != null)
-                    .flatMap(o -> o.supplierOrders.stream())
-                    .filter(so -> {
-                        try {
-                            return so.loadingDate != null
-                                    && !so.loadingDate.isBlank()
-                                    && LocalDate.parse(so.loadingDate.substring(0, 10)).equals(targetDate)
-                                    && so.loadingDriver != null
-                                    && so.loadingDriver.contains(driverName);
-                        } catch (Exception e) { return false; }
-                    })
-                    .map(so -> so.supplierWarehouse != null ? so.supplierWarehouse.trim() : "")
-                    .filter(s -> !s.isEmpty())
-                    .collect(Collectors.toSet())
-                    .size();
+            // Кнопка «🧾 Счета» для КАЖДОЙ даты (в т.ч. если dayOrders пуст)
+            keyboard.add(Collections.singletonList(
+                    new InlineKeyboardButton("\uD83E\uDDFE Счета (" + targetDate.format(DATE_FORMATTER) + ")")
+                            .callbackData("rc:" + driver.getId() + ":" + targetDate)
+            ));
 
-            int totalPoints = orderCount + warehousePoints;
-
-            sb.append("📊 Итого:\n");
-            sb.append("  Количество точек: ").append(totalPoints).append("\n");
-            sb.append("  Вес: ").append(String.format("%.2f", totalWeight)).append(" кг\n");
-            sb.append("  Объем: ").append(String.format("%.2f", totalVolume)).append(" м³\n");
-            sb.append("  Длина (макс.): ").append(String.format("%.2f", maxLength)).append(" м\n");
-
-
-            // хотя бы один маршрут доступен для отправки
+            // хотя бы по одной дате маршрут доступен для отправки
             if (!driver.getRouteStatus(targetDate).isRequested() && !driver.getRouteStatus(targetDate).isConfirmed()) {
                 hasRoutesToSend = true;
             }
         }
 
-        // Кнопка "Отправить маршрут" — одна на все даты
+        // Кнопка "Отправить маршрут" — одна на все даты (по ближайшему рабочему дню)
         if (hasRoutesToSend) {
             InlineKeyboardButton btnSendRoute = new InlineKeyboardButton("📤 Отправить маршрут")
                     .callbackData("routes:send:" + getNextWorkday() + ":" + driver.getId());
@@ -643,19 +660,22 @@ public class Routes {
         keyboard.add(Collections.singletonList(btnBack));
 
         if (update.callbackQuery() != null) {
-            Main.getInstance().editMessage(chatId,
+            Main.getInstance().editMessage(
+                    chatId,
                     update.callbackQuery().message().messageId(),
                     sb.toString(),
-                    keyboard);
+                    keyboard
+            );
         } else {
             Main.getInstance().sendInlineKeyboard(chatId, keyboard, sb.toString());
         }
     }
 
 
+
     public static void sendRouteConfirmationToDriver(UserData driver, LocalDate date) {
         if (driver == null || driver.getId() == null) return;
-
+        if (!"DRIVER".equalsIgnoreCase(driver.getRole())) return;
         Long chatId = driver.getId();
         String driverName = driver.getName();
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yyyy");
@@ -1150,7 +1170,7 @@ public class Routes {
 
             if (OrderLoader.hasDriverProblemOrders(OrderLoader.orders, user.getName(), date)) {
                 Main.getInstance().sendMessage(chatId,
-                        "⚠️ У вас есть незавершённые заказы. Пожалуйста, проставьте статусы:\n" +
+                        "⚠️ У вас есть незавершённые заказы. Пожалуйста, проставьте статусы и прикрепите фото:\n" +
                                 OrderLoader.getDriverProblemOrderNumbers(OrderLoader.orders, user.getName(), date));
                 return;
             }
@@ -1158,6 +1178,9 @@ public class Routes {
             Main.getInstance().editMessage(chatId, messageId,
                     "Вы успешно завершили маршрут за " + date.format(DATE_FORMATTER) + "!");
             notifyAdminsAndLogisticsStartedOrFinished(user, false, date);
+
+            ReportManager.updateRouteStats(user, date);
+
         }
     }
 

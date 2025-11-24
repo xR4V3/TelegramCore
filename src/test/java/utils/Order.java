@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.beans.Transient;
 import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -84,20 +83,19 @@ public class Order {
     @JsonProperty("ЗаказыПоставщику")
     public List<SupplierOrder> supplierOrders;
 
+    // ✳️ Новое: список перемещений товаров
+    @JsonProperty("ПеремещениеТоваров")
+    public List<Movement> movements;
+
     @JsonIgnore
     public String getCleanOrderNumber() {
         if (orderNumber == null) return "";
-
-        // Извлечь номер до "от"
         String[] parts = orderNumber.split("от");
         if (parts.length == 0) return "";
-
-        // Удалить всё, кроме цифр и убрать ведущие нули
         String numPart = parts[0].replaceAll("\\D", "");
-        return String.valueOf(Long.parseLong(numPart)); // Убирает ведущие нули
+        return numPart.isEmpty() ? "" : String.valueOf(Long.parseLong(numPart));
     }
 
-    // Класс для описания структуры "ЗаказыПоставщику"
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class SupplierOrder {
         @JsonProperty("Поставщик")
@@ -117,7 +115,53 @@ public class Order {
 
         @JsonProperty("ТоварныйСостав")
         public String productComposition;
+
+        // ✳️ Новое: список возвратов по этому заказу поставщику
+        @JsonProperty("Возвраты")
+        public List<ReturnItem> returns;
+
+        @JsonProperty("Организация")
+        public String organization;
+    }
+
+    // ✳️ Новое: модель «Возврат»
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ReturnItem {
+        @JsonProperty("НомерВозврата")
+        public String returnNumber;
+
+        @JsonProperty("Комментарий")
+        public String comment;
+
+        @JsonProperty("ВодительВозврата")
+        public String returnDriver;
+
+        @JsonProperty("Статус")
+        public String status;
+
+        @JsonProperty("ТоварныйСостав")
+        public String productComposition;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Movement {
+        @JsonProperty("Отправитель")
+        public String sender;
+
+        @JsonProperty("Получатель")
+        public String recipient;
+
+        @JsonProperty("НомерПеремещения")
+        public String movementNumber;
+
+        @JsonProperty("ВодительПогрузки")
+        public String loadingDriver;
+
+        @JsonProperty("ТоварныйСостав")
+        public String productComposition;
+
+        @JsonProperty("ДатаПеремещения")
+        public String movementDate;
     }
 
 }
-
